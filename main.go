@@ -28,6 +28,18 @@ type Vote struct {
 	Term int
 }
 
+type Command struct {
+	Operation OperationEnum
+	Data      int
+}
+
+type ChangeLog struct {
+	CommandExec  Command
+	Index        int
+	Commit       bool
+	Contributors int
+}
+
 var (
 	port     string
 	peers    []Peer
@@ -38,15 +50,24 @@ var (
 	term      int       = 0
 	voteCount int       = 1
 
-	addVote          chan Vote
-	voteRequest_chan chan Vote
-	appointLeader    chan string
-	stopHeartBeat    chan bool
-	appendEntry_chan chan Peer
+	addVote                      chan Vote
+	voteRequest_chan             chan Vote
+	appointLeader                chan string
+	stopHeartBeat                chan bool
+	appendEntry_chan             chan Peer
+	appendEntryData_chan         chan ChangeLog
+	appendEntryResponseData_chan chan ChangeLog
 )
 var (
 	electionTimer  *time.Timer
 	heartbeatTimer *time.Timer
+)
+
+var (
+	data            int               // Replicate Data on a node.
+	entryQueue_chan chan ChangeLog    // Unapproved Log Entries
+	entryLog        map[int]ChangeLog // Approved Log Entries
+	lastLogIndex    int
 )
 
 //-----------------------------------------------------------------------------
@@ -85,9 +106,6 @@ func (p Peer) sendMessage(msg Message) {
 		return
 	}
 
-	gob.Register(Peer{})
-	gob.Register(Vote{})
-
 	gobEncoder := gob.NewEncoder(conn)
 	err = gobEncoder.Encode(msg)
 	if err != nil {
@@ -105,9 +123,6 @@ func (p Peer) sendMessage(msg Message) {
 func recvMessage(conn net.Conn) (Message, bool) {
 
 	var msg Message
-
-	gob.Register(Peer{})
-	gob.Register(Vote{})
 
 	dec := gob.NewDecoder(conn)
 	err := dec.Decode(&msg)
@@ -140,6 +155,14 @@ func startElection() {
 }
 
 /*
+	Performs said operation on data
+*/
+func performOperation(op Command) {
+	fmt.Println("[X] Executed Command!")
+	fmt.Println(op.Operation, op.Data)
+}
+
+/*
 	Routine To Send Append Entries to Peers
 	Sends after every 3 seconds;
 */
@@ -153,11 +176,17 @@ func initHeartBeatMessage() {
 		select {
 		case <-stopHeartBeat:
 			// Stop HeartBeat
+		// Send Command to peers
+		case commandRecv := <-entryQueue_chan:
+			fmt.Println("[->] Sending AppendEntriesWithData to peers..")
+			for _, peer := range peers {
+				go peer.sendMessage(Message{AppendEntryWithData, commandRecv})
+			}
+
 		default:
 			fmt.Println("[->] Sending Heartbeat to peers..")
 			for _, peer := range peers {
 				go peer.sendMessage(Message{AppendEntry, Peer{port}})
-
 			}
 		}
 	}
@@ -187,11 +216,11 @@ func checkMajority() bool {
 	is less than Vote Term ( Meaning node hasn't casted
 	vote yet )
 */
-func sendVote(vote Vote) {
+func sendVote(vote Vote) bool {
 
 	// TODO contingency cases ??
 	fmt.Println("[2] Election Term: ", vote.Term)
-
+	voteCasted := false
 	electionTerm := vote.Term
 	if term < electionTerm { // node hasn't voted for this term yet
 		term = electionTerm
@@ -200,10 +229,11 @@ func sendVote(vote Vote) {
 		//var conn net.Conn
 		sender := Peer{vote.Sender}
 		go sender.sendMessage(Message{GiveVote, vote})
+		voteCasted = true
 	} else {
 		fmt.Println("[2] Node already sent vote..")
 	}
-
+	return voteCasted
 }
 
 /*
@@ -238,7 +268,7 @@ func resetTimer(t *time.Timer, d time.Duration) {
 /*
 	Routine to handle every Communication
 */
-func initRoutineHandler() {
+func initElectionRoutineHandler() {
 
 	// Sleep for enabling node boot ?
 	//electionTimer = time.NewTimer(5 * time.Second) // TODO Random
@@ -248,7 +278,7 @@ func initRoutineHandler() {
 	// throws invalid memory access for timer.C
 	heartbeatTimer = time.NewTimer(0 * time.Second)
 	<-heartbeatTimer.C // drain
-
+loop:
 	for {
 
 		select {
@@ -274,27 +304,11 @@ func initRoutineHandler() {
 			fmt.Println("[1] Election Timer Reset..")
 			electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
 
-		// Heartbeat Timer has expired
-		// Start New Election with +1 Term
-		// Start Election Timer
-		case <-heartbeatTimer.C:
-			// Append Entry Not Recieved not recvied ..
-			fmt.Println("[4] Heartbeat Timer expired..")
-
-			term++
-			voteCount = 1
-			go startElection()
-
-			// Start Election Timer
-			fmt.Println("[1] Election Timer Start..")
-			electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
-
 		// A node sent a vote
 		case vote := <-addVote:
-			// Check if recv msg of vote is of the same term
 
 			fmt.Println("[-] Vote Count: ", voteCount, "  Term: ", term)
-
+			// Check if recv msg of vote is of the same term
 			if vote.Term == term {
 				voteCount++
 
@@ -303,13 +317,15 @@ func initRoutineHandler() {
 				// If majority achieved
 				if checkMajority() {
 
-					go initHeartBeatMessage() // Start sending AppendEntries Mesages
-
 					// Stop Election Timer
 					fmt.Println("[3] Stopping Election Timer..")
 					if !electionTimer.Stop() {
 						<-electionTimer.C // drain timer
 					}
+
+					go initHeartbeatRoutineHandler() // switch to heartbeat routine
+					go initHeartBeatMessage()        // Start sending AppendEntries Mesages
+					break loop                       // exit from election routine
 
 				} else {
 					// Reset Election Timer
@@ -321,16 +337,15 @@ func initRoutineHandler() {
 		// A node requested for vote
 		case vote := <-voteRequest_chan:
 			fmt.Println("[] Vote Request by ", vote.Sender)
-
 			// Send response to vote only if you are a Follower & No Leader exists in network
+			//			if state == Follower {
 
-			if state == Follower {
+			go sendVote(vote)
+			fmt.Println("[2] Reseting Election timer..")
+			resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
 
-				if leader == nil {
-					go sendVote(vote)
-					fmt.Println("[2] Reseting Election timer..")
-					resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
-				} else {
+			//			} else {
+			/*
 					go sendVote(vote)
 
 					if stopOnce == false {
@@ -347,8 +362,9 @@ func initRoutineHandler() {
 					}
 
 				}
+			*/
 
-			}
+			//			}
 
 		// A Leader Has been Appointed
 		case peer := <-appointLeader:
@@ -361,9 +377,80 @@ func initRoutineHandler() {
 			if !electionTimer.Stop() {
 				<-electionTimer.C // drain timer
 			}
-
 			heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(5)+7) * time.Second)
-			stopOnce = false
+			go initHeartbeatRoutineHandler() // switch to heartbeat routine
+			break loop                       // exit from election routine
+			//stopOnce = false
+		}
+
+	}
+
+}
+
+func initHeartbeatRoutineHandler() {
+
+loop:
+	for {
+		select {
+
+		// Heartbeat Timer has expired
+		// Start New Election with +1 Term
+		// Start Election Timer
+		case <-heartbeatTimer.C:
+			// Append Entry Not Recieved not recvied ..
+			fmt.Println("[4] Heartbeat Timer expired..")
+
+			term++
+			voteCount = 1
+			go startElection()
+
+			// Start Election Timer
+			fmt.Println("[1] Election Timer Start..")
+			electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+
+			// switch to election routine
+			go initElectionRoutineHandler()
+			break loop
+			// exit the function
+
+		case vote := <-voteRequest_chan:
+			fmt.Println("[] Vote Request by ", vote.Sender)
+			// Send response to vote only if you are a Follower & No Leader exists in network
+			//			if state == Follower {
+
+			if voteCasted := sendVote(vote); voteCasted {
+				fmt.Println("[5] Stopping Heartbeat Timer..")
+				if !heartbeatTimer.Stop() {
+					<-heartbeatTimer.C // drain timer
+				}
+
+				fmt.Println("[5] Starting Election Timer..")
+				electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+				go initElectionRoutineHandler()
+				break loop
+			}
+
+			//			} else {
+			/*
+					go sendVote(vote)
+
+					if stopOnce == false {
+						fmt.Println("[5] Stopping Heartbeat Timer..")
+						if !heartbeatTimer.Stop() {
+							<-heartbeatTimer.C // drain timer
+						}
+						fmt.Println("[5] Starting Election Timer..")
+						electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+						stopOnce = true
+					} else {
+						fmt.Println("[2] Reseting Election timer..")
+						resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
+					}
+
+				}
+			*/
+
+			//			}
 		// A Leader has sent append entries message .. Send Response
 		case leaderRecv := <-appendEntry_chan:
 			// TODO compare leaders ??
@@ -372,15 +459,55 @@ func initRoutineHandler() {
 			// reset heartbeat timer ( may or maynot be drained )
 			fmt.Println("[4] Reseting Heartbeat Timer..")
 			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+
+		// A Follower received AppendEntrywithData
+		case changeLogRecv := <-appendEntryData_chan:
+			// TODO check for duplicate  ??
+
+			// New Log Entry
+			if changeLogRecv.Commit == false {
+				entryLog[changeLogRecv.Index] = changeLogRecv
+				// Resend to verify
+				go leader.sendMessage(Message{AppendEntryResponseWithData, changeLogRecv})
+			} else {
+				obj := entryLog[changeLogRecv.Index]
+				obj.Commit = true
+				entryLog[changeLogRecv.Index] = obj
+				go performOperation(obj.CommandExec) // Commit Changes to data
+			}
+
+			for key, value := range entryLog {
+				fmt.Println("Key:", key, "Value:", value)
+			}
+			// reset heartbeat timer ( may or maynot be drained )
+			fmt.Println("[4] Reseting Heartbeat Timer..")
+			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+
+		// A leader received AppendEntryResponseWithData
+		case recv := <-appendEntryResponseData_chan:
+			obj := entryLog[recv.Index]
+			obj.Contributors += 1
+			if obj.Commit == false { // If not already committed
+
+				if obj.Contributors == (len(peers)+1)/2+1 { // Check Majority
+
+					obj.Commit = true
+					entryQueue_chan <- obj               // Add in queue to be sent with append entry message
+					go performOperation(obj.CommandExec) // Commit Changes on leader node
+				}
+			}
+
+			entryLog[obj.Index] = obj
+
 		}
-
 	}
-
 }
 
 /*
 	Function to handle requests recieved
 	args := conn - Connection from request is received
+
+	TODO drop irrelevent messages instead of pushing to channels ?
 */
 func handleConnectionRequest(conn net.Conn) {
 
@@ -419,6 +546,26 @@ func handleConnectionRequest(conn net.Conn) {
 	case AppendEntryResponse:
 		fmt.Println("[4] Append Entry Response From ", (msg.Data.(Peer)).Port)
 		//TODO what to do ?
+
+	// A client has send a log entry command
+	case LogCommand:
+		if state == Leader {
+			lastLogIndex += 1
+			newLogEntry := ChangeLog{msg.Data.(Command), lastLogIndex, false, 1}
+			entryLog[lastLogIndex] = newLogEntry
+			entryQueue_chan <- newLogEntry
+		} else {
+			fmt.Println("[E] Node Not Leader")
+		}
+
+	// A Follower Recieved Append Entry with Data
+	case AppendEntryWithData:
+		appendEntryData_chan <- msg.Data.(ChangeLog)
+
+	// A Leader Recieved Append Entry Response with Data
+	case AppendEntryResponseWithData:
+		appendEntryResponseData_chan <- msg.Data.(ChangeLog)
+
 	}
 
 }
@@ -461,18 +608,29 @@ func main() {
 	flag.Parse()
 	DialPorts := flag.Args() // Peers' ports
 
+	// Register Interfaces
+	gob.Register(Peer{})
+	gob.Register(Vote{})
+	gob.Register(Command{})
+	gob.Register(ChangeLog{})
+
 	// Init Channels
 	voteRequest_chan = make(chan Vote)
 	addVote = make(chan Vote)
 	appointLeader = make(chan string)
 	stopHeartBeat = make(chan bool)
 	appendEntry_chan = make(chan Peer)
+	appendEntryData_chan = make(chan ChangeLog)
+	appendEntryResponseData_chan = make(chan ChangeLog, 10)
+	entryQueue_chan = make(chan ChangeLog, 5)
+
+	entryLog = make(map[int]ChangeLog)
 
 	port = *ListenPortPtr
-	go initListen(port)
 
 	go initPeers(DialPorts)
 
-	initRoutineHandler()
+	go initElectionRoutineHandler()
 
+	initListen(port)
 }

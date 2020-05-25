@@ -9,10 +9,13 @@ const (
 	HeartBeat
 	AppendEntry
 	AppendEntryResponse
+	AppendEntryWithData
+	AppendEntryResponseWithData
+	LogCommand
 )
 
 func (d MessageTypeEnum) String() string {
-	return [...]string{"RequestVote", "GiveVote", "LeaderAppointed", "HeartBeat", "AppendEntry", "AppendEntryResponse"}[d]
+	return [...]string{"RequestVote", "GiveVote", "LeaderAppointed", "HeartBeat", "AppendEntry", "AppendEntryResponse", "AppendEntryWithData", "AppendEntryResponseWithData", "LogCommand"}[d]
 }
 
 type StateEnum int
@@ -25,4 +28,17 @@ const (
 
 func (d StateEnum) String() string {
 	return [...]string{"Follower", "Candidate", "Leader"}[d]
+}
+
+type OperationEnum int
+
+const (
+	SET OperationEnum = iota
+	GET
+	ADD
+	SUBTRACT
+)
+
+func (d OperationEnum) String() string {
+	return [...]string{"SET", "GET", "ADD", "SUBTRACT"}[d]
 }

@@ -56,6 +56,9 @@ var (
 
 	MajorityCount int
 
+	interval int = 5
+	offset   int = 8
+
 	state     StateEnum = Follower
 	term      int       = 0
 	voteCount int       = 1
@@ -176,7 +179,14 @@ func startElection() {
 */
 func performOperation(op Command) {
 	fmt.Println("[X] Executed Command!")
-	fmt.Println(op.Operation, op.Data)
+
+	switch op.Operation {
+	case SET:
+		data = op.Data
+	case ADD:
+		data += op.Data
+	}
+	fmt.Println(op.Operation, op.Data, " --> ", data)
 }
 
 /*
@@ -184,6 +194,7 @@ func performOperation(op Command) {
 	Sends after every 3 seconds;
 */
 func initHeartBeatMessage() {
+
 	fmt.Println("[4] Init Heartbeat Timer..")
 loop:
 	for {
@@ -232,7 +243,6 @@ func checkMajority() bool {
 		for _, peer := range peers {
 			go peer.sendMessage(Message{LeaderAppointed, port})
 		}
-
 		state = Leader
 		fmt.Println("[3] Leader elected..")
 
@@ -308,7 +318,7 @@ func initElectionRoutineHandler() {
 
 	// Sleep for enabling node boot ?
 	//electionTimer = time.NewTimer(5 * time.Second) // TODO Random
-	electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+	electionTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 
 	// TODO Figure out to make a blank object -->>POINTERS<<--
 	// throws invalid memory access for timer.C
@@ -338,7 +348,7 @@ loop:
 
 			// Reset Election Timer
 			fmt.Println("[1] Election Timer Reset..")
-			electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+			electionTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 
 		// A node sent a vote
 		case vote := <-addVote:
@@ -366,7 +376,7 @@ loop:
 				} else {
 					// Reset Election Timer
 					fmt.Println("[2] Reseting Election timer..")
-					resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
+					resetTimer(electionTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 				}
 			}
 
@@ -378,7 +388,7 @@ loop:
 
 			go sendVote(vote)
 			fmt.Println("[2] Reseting Election timer..")
-			resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
+			resetTimer(electionTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 
 			//			} else {
 			/*
@@ -390,11 +400,11 @@ loop:
 							<-heartbeatTimer.C // drain timer
 						}
 						fmt.Println("[5] Starting Election Timer..")
-						electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+						electionTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 						stopOnce = true
 					} else {
 						fmt.Println("[2] Reseting Election timer..")
-						resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
+						resetTimer(electionTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 					}
 
 				}
@@ -406,14 +416,14 @@ loop:
 		case peer := <-appointLeader:
 
 			//firstLeader := leader == nil
-			go setLeader(peer)
+			setLeader(peer)
 
 			// Stop Election Timer
 			fmt.Println("[3] Election Timer Stopped..")
 			if !electionTimer.Stop() {
 				<-electionTimer.C // drain timer
 			}
-			heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(5)+7) * time.Second)
+			heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 			go initHeartbeatRoutineHandler() // switch to heartbeat routine
 			break loop                       // exit from election routine
 			//stopOnce = false
@@ -442,7 +452,7 @@ loop:
 
 			// Start Election Timer
 			fmt.Println("[1] Election Timer Start..")
-			electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+			electionTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 
 			// switch to election routine
 			go initElectionRoutineHandler()
@@ -461,30 +471,10 @@ loop:
 				}
 
 				fmt.Println("[5] Starting Election Timer..")
-				electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+				electionTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 				go initElectionRoutineHandler()
 				break loop
 			}
-
-			//			} else {
-			/*
-					go sendVote(vote)
-
-					if stopOnce == false {
-						fmt.Println("[5] Stopping Heartbeat Timer..")
-						if !heartbeatTimer.Stop() {
-							<-heartbeatTimer.C // drain timer
-						}
-						fmt.Println("[5] Starting Election Timer..")
-						electionTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
-						stopOnce = true
-					} else {
-						fmt.Println("[2] Reseting Election timer..")
-						resetTimer(electionTimer, time.Duration(rand.Intn(5)+6)*time.Second)
-					}
-
-				}
-			*/
 
 			//			}
 		// A Leader has sent append entries message [Vote] .. Send Response
@@ -506,15 +496,17 @@ loop:
 				fmt.Println("[-] Requesting Updated Log..")
 				go leader.sendMessage(Message{RequestUpdateLog, Peer{port}})
 
-				heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+				heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(interval)+offset) * time.Second)
 
 			} else if leaderRecv.Term == term {
 				go leader.sendMessage(Message{AppendEntryResponse, Peer{port}})
 				// reset heartbeat timer ( may or maynot be drained )
 				fmt.Println("[4] Reseting Heartbeat Timer..")
-				resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+				resetTimer(heartbeatTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 			}
 			// Less than can be a stray append entry -- Ignore
+
+			resetTimer(heartbeatTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 
 		// A Follower received AppendEntrywithData
 		case changeLogRecv := <-appendEntryData_chan:
@@ -540,7 +532,7 @@ loop:
 			}
 			// reset heartbeat timer ( may or maynot be drained )
 			fmt.Println("[4] Reseting Heartbeat Timer..")
-			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+			resetTimer(heartbeatTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 
 		// A leader received AppendEntryResponseWithData
 		case recv := <-appendEntryResponseData_chan:
@@ -568,7 +560,7 @@ loop:
 			peers = blackoutPeers
 
 			fmt.Println("[4] Reseting Heartbeat Timer..")
-			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+			resetTimer(heartbeatTimer, time.Duration(rand.Intn(interval)+offset)*time.Second)
 		}
 	}
 }

@@ -5,28 +5,24 @@
 package main
 
 import (
-	"bufio"
 	"encoding/gob"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"os"
 )
 
-var max_options int = 6
+var max_options int = 4
 var leaderPort string
 
 // Displays option menu
 func DisplayMenu() {
 	fmt.Println()
 	fmt.Println("Please select an option:")
-	fmt.Println("1 – UP : turn on a node.")
-	fmt.Println("2 – DOWN : turn off a node. ")
-	fmt.Println("3 - SET : set value of data ")
-	fmt.Println("4 - ADD : add value to data ")
-	fmt.Println("5 - BLACKOUT : simulate network partition ")
-	fmt.Println("6 - LIGHTSON : heal network partition ")
+	fmt.Println("1 - SET : set value of data ")
+	fmt.Println("2 - ADD : add value to data ")
+	fmt.Println("3 - BLACKOUT : simulate network partition ")
+	fmt.Println("4 - LIGHTSON : heal network partition ")
 	fmt.Println("0 – EXIT : exit command center. ")
 
 	fmt.Println()
@@ -112,10 +108,6 @@ func main() {
 			fmt.Println("Exiting...")
 			execute = false
 		case 1:
-			fmt.Println("Node UP")
-		case 2:
-			fmt.Println("Node DOWN")
-		case 3:
 			fmt.Println("Node SET")
 			fmt.Printf("Input >> ")
 			_, err := fmt.Scan(&input)
@@ -123,16 +115,19 @@ func main() {
 				fmt.Println("Error: ", err)
 			}
 			go sendMessage(Message{LogCommand, Command{SET, input}}, leaderPort)
-		case 4:
-			fmt.Printf("Enter Message >> ")
-			in := bufio.NewReader(os.Stdin)
-			line, _ := in.ReadString('\n') // Read input with spaces
-			fmt.Printf("Your message: %s\n", line)
+		case 2:
+			fmt.Println("Node ADD")
+			fmt.Printf("Input >> ")
+			_, err := fmt.Scan(&input)
+			if err != nil {
+				fmt.Println("Error: ", err)
+			}
+			go sendMessage(Message{LogCommand, Command{ADD, input}}, leaderPort)
 
-		case 5:
+		case 3:
 			fmt.Println("Going Dark...")
 			go sendMessage(Message{Blackout, Peer{leaderPort}}, leaderPort)
-		case 6:
+		case 4:
 			fmt.Println("Let there be light...")
 			go sendMessage(Message{LightsOn, Peer{leaderPort}}, leaderPort)
 		}

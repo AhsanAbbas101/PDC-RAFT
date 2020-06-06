@@ -12,10 +12,11 @@ const (
 	AppendEntryWithData
 	AppendEntryResponseWithData
 	LogCommand
+	Blackout
 )
 
 func (d MessageTypeEnum) String() string {
-	return [...]string{"RequestVote", "GiveVote", "LeaderAppointed", "HeartBeat", "AppendEntry", "AppendEntryResponse", "AppendEntryWithData", "AppendEntryResponseWithData", "LogCommand"}[d]
+	return [...]string{"RequestVote", "GiveVote", "LeaderAppointed", "HeartBeat", "AppendEntry", "AppendEntryResponse", "AppendEntryWithData", "AppendEntryResponseWithData", "LogCommand", "Blackout"}[d]
 }
 
 type StateEnum int

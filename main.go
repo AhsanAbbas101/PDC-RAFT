@@ -41,10 +41,14 @@ type ChangeLog struct {
 }
 
 var (
-	port     string
-	peers    []Peer
-	leader   *Peer = nil
-	stopOnce bool  = false
+	port          string
+	originalPeers []Peer
+	peers         []Peer
+	blackoutPeers []Peer
+	leader        *Peer = nil
+	stopOnce      bool  = false
+
+	MajorityCount int
 
 	state     StateEnum = Follower
 	term      int       = 0
@@ -57,6 +61,9 @@ var (
 	appendEntry_chan             chan Peer
 	appendEntryData_chan         chan ChangeLog
 	appendEntryResponseData_chan chan ChangeLog
+
+	blackout_chan chan Peer
+	goDark_chan   chan Peer
 )
 var (
 	electionTimer  *time.Timer
@@ -89,8 +96,11 @@ func initPeers(dailPorts []string) {
 			}
 		*/
 		//var conn net.Conn
-		peers = append(peers, Peer{port})
+		originalPeers = append(originalPeers, Peer{port})
+		//peers = append(peers, Peer{port})
 	}
+	peers = originalPeers
+	MajorityCount = (len(peers)+1)/2 + 1
 
 }
 
@@ -183,6 +193,18 @@ func initHeartBeatMessage() {
 				go peer.sendMessage(Message{AppendEntryWithData, commandRecv})
 			}
 
+		case <-blackout_chan:
+			fmt.Println("[->] Sending Blackout to peers..")
+			// Choose a partner peer for leader
+			for _, peer := range peers {
+				go peer.sendMessage(Message{Blackout, peers[0]})
+			}
+			// Leader only has one peer node
+			if len(peers) > 0 {
+				blackoutPeers = append(blackoutPeers, peers[0])
+			}
+			peers = blackoutPeers // Change Peers Pointer
+
 		default:
 			fmt.Println("[->] Sending Heartbeat to peers..")
 			for _, peer := range peers {
@@ -198,7 +220,7 @@ func initHeartBeatMessage() {
 */
 func checkMajority() bool {
 
-	if voteCount == (len(peers)+1)/2+1 { // Majority Acquired
+	if voteCount == MajorityCount { // Majority Acquired
 		for _, peer := range peers {
 			go peer.sendMessage(Message{LeaderAppointed, port})
 		}
@@ -489,7 +511,7 @@ loop:
 			obj.Contributors += 1
 			if obj.Commit == false { // If not already committed
 
-				if obj.Contributors == (len(peers)+1)/2+1 { // Check Majority
+				if obj.Contributors == MajorityCount { // Check Majority
 
 					obj.Commit = true
 					entryQueue_chan <- obj               // Add in queue to be sent with append entry message
@@ -499,6 +521,17 @@ loop:
 
 			entryLog[obj.Index] = obj
 
+		// Leader Has Opted To Black Out with a Peer
+		case peerToRemove := <-goDark_chan:
+			for _, peer := range peers {
+				if peer.Port != peerToRemove.Port || peer.Port != leader.Port {
+					blackoutPeers = append(blackoutPeers, peer)
+				}
+			}
+			peers = blackoutPeers
+
+			fmt.Println("[4] Reseting Heartbeat Timer..")
+			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
 		}
 	}
 }
@@ -566,6 +599,14 @@ func handleConnectionRequest(conn net.Conn) {
 	case AppendEntryResponseWithData:
 		appendEntryResponseData_chan <- msg.Data.(ChangeLog)
 
+	// Simulate Network Partition.
+	case Blackout:
+		if state == Leader {
+			blackout_chan <- msg.Data.(Peer)
+		} else {
+			// Remove leader from array of peers
+			goDark_chan <- msg.Data.(Peer)
+		}
 	}
 
 }
@@ -624,11 +665,14 @@ func main() {
 	appendEntryResponseData_chan = make(chan ChangeLog, 10)
 	entryQueue_chan = make(chan ChangeLog, 5)
 
+	blackout_chan = make(chan Peer)
+	goDark_chan = make(chan Peer)
+
 	entryLog = make(map[int]ChangeLog)
 
 	port = *ListenPortPtr
 
-	go initPeers(DialPorts)
+	initPeers(DialPorts)
 
 	go initElectionRoutineHandler()
 

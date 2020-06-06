@@ -24,14 +24,17 @@ func DisplayMenu() {
 	fmt.Println("1 – UP : turn on a node.")
 	fmt.Println("2 – DOWN : turn off a node. ")
 	fmt.Println("3 - SET : set value of data ")
-	fmt.Println("4 - GET : get value of data ")
-	fmt.Println("5 - ADD : add value to data ")
+	fmt.Println("4 - ADD : add value to data ")
+	fmt.Println("5 - BLACKOUT : simulate network partition ")
 	fmt.Println("0 – EXIT : exit command center. ")
 
 	fmt.Println()
 
 }
 
+type Peer struct {
+	Port string
+}
 type Message struct {
 	MessageType MessageTypeEnum
 	Data        interface{}
@@ -62,6 +65,7 @@ func main() {
 
 	gob.Register(Command{})
 	gob.Register(Message{})
+	gob.Register(Peer{})
 
 	// Get Leader Port
 	flag.Parse()
@@ -123,6 +127,10 @@ func main() {
 			in := bufio.NewReader(os.Stdin)
 			line, _ := in.ReadString('\n') // Read input with spaces
 			fmt.Printf("Your message: %s\n", line)
+
+		case 5:
+			fmt.Println("Going Dark...")
+			go sendMessage(Message{Blackout, Peer{leaderPort}}, leaderPort)
 		}
 	}
 

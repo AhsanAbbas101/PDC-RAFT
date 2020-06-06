@@ -14,6 +14,8 @@ const (
 	LogCommand
 	Blackout
 	LightsOn
+	RequestUpdateLog
+	UpdateLog
 )
 
 func (d MessageTypeEnum) String() string {
@@ -27,7 +29,9 @@ func (d MessageTypeEnum) String() string {
 		"AppendEntryResponseWithData",
 		"LogCommand",
 		"Blackout",
-		"LightsOn"}[d]
+		"LightsOn",
+		"RequestUpdateLog",
+		"UpdateLog"}[d]
 }
 
 type StateEnum int

@@ -40,6 +40,12 @@ type ChangeLog struct {
 	Contributors int
 }
 
+type UpdateLogStruct struct {
+	Log         map[int]ChangeLog
+	LastIndex   int
+	CurrentData int
+}
+
 var (
 	port          string
 	originalPeers []Peer
@@ -259,6 +265,8 @@ func sendVote(vote Vote) bool {
 		// Leader already exists in network with higher term
 		if state == Leader {
 			go sender.sendMessage(Message{LeaderAppointed, port})
+
+			go sender.sendMessage(Message{UpdateLog, UpdateLogStruct{entryLog, lastLogIndex, data}})
 		}
 	}
 	return voteCasted
@@ -492,10 +500,11 @@ loop:
 					stopHeartBeat <- true // Close initHeartbeatMessages
 				}
 				// Set new leader
-				go setLeader(leaderRecv.Sender)
+				setLeader(leaderRecv.Sender)
 
 				// Request Updated Log
 				fmt.Println("[-] Requesting Updated Log..")
+				go leader.sendMessage(Message{RequestUpdateLog, Peer{port}})
 
 				heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
 
@@ -510,7 +519,10 @@ loop:
 		// A Follower received AppendEntrywithData
 		case changeLogRecv := <-appendEntryData_chan:
 			// TODO check for duplicate  ??
-
+			fmt.Println("---->Recv:", changeLogRecv.Index, "Saved:", lastLogIndex)
+			if changeLogRecv.Index > lastLogIndex {
+				lastLogIndex = changeLogRecv.Index
+			}
 			// New Log Entry
 			if changeLogRecv.Commit == false {
 				entryLog[changeLogRecv.Index] = changeLogRecv
@@ -544,7 +556,7 @@ loop:
 				}
 			}
 
-			entryLog[obj.Index] = obj
+			entryLog[recv.Index] = obj
 
 		// Leader Has Opted To Black Out with a Peer
 		case peerToRemove := <-goDark_chan:
@@ -640,6 +652,21 @@ func handleConnectionRequest(conn net.Conn) {
 				go peer.sendMessage(Message{LightsOn, Peer{port}})
 			}
 		}
+	// A Node has requested updated log
+	case RequestUpdateLog:
+		peer := msg.Data.(Peer)
+		go peer.sendMessage(Message{UpdateLog, UpdateLogStruct{entryLog, lastLogIndex, data}})
+
+		// A Node has received updated log
+	case UpdateLog:
+		recv := msg.Data.(UpdateLogStruct)
+		data = recv.CurrentData
+		entryLog = recv.Log
+		lastLogIndex = recv.LastIndex
+		for key, value := range entryLog {
+			fmt.Println("Key:", key, "Value:", value)
+		}
+
 	}
 
 }
@@ -687,6 +714,7 @@ func main() {
 	gob.Register(Vote{})
 	gob.Register(Command{})
 	gob.Register(ChangeLog{})
+	gob.Register(UpdateLogStruct{})
 
 	// Init Channels
 	voteRequest_chan = make(chan Vote)

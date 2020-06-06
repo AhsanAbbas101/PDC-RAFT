@@ -14,7 +14,7 @@ import (
 	"os"
 )
 
-var max_options int = 5
+var max_options int = 6
 var leaderPort string
 
 // Displays option menu
@@ -26,6 +26,7 @@ func DisplayMenu() {
 	fmt.Println("3 - SET : set value of data ")
 	fmt.Println("4 - ADD : add value to data ")
 	fmt.Println("5 - BLACKOUT : simulate network partition ")
+	fmt.Println("6 - LIGHTSON : heal network partition ")
 	fmt.Println("0 – EXIT : exit command center. ")
 
 	fmt.Println()
@@ -131,6 +132,9 @@ func main() {
 		case 5:
 			fmt.Println("Going Dark...")
 			go sendMessage(Message{Blackout, Peer{leaderPort}}, leaderPort)
+		case 6:
+			fmt.Println("Let there be light...")
+			go sendMessage(Message{LightsOn, Peer{leaderPort}}, leaderPort)
 		}
 	}
 

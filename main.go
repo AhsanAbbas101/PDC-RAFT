@@ -58,12 +58,13 @@ var (
 	voteRequest_chan             chan Vote
 	appointLeader                chan string
 	stopHeartBeat                chan bool
-	appendEntry_chan             chan Peer
+	appendEntry_chan             chan Vote
 	appendEntryData_chan         chan ChangeLog
 	appendEntryResponseData_chan chan ChangeLog
 
-	blackout_chan chan Peer
-	goDark_chan   chan Peer
+	blackout_chan        chan Peer
+	goDark_chan          chan Peer
+	letThereBeLight_chan chan bool
 )
 var (
 	electionTimer  *time.Timer
@@ -177,8 +178,8 @@ func performOperation(op Command) {
 	Sends after every 3 seconds;
 */
 func initHeartBeatMessage() {
-
 	fmt.Println("[4] Init Heartbeat Timer..")
+loop:
 	for {
 		// Sleep
 		time.Sleep(3 * time.Second)
@@ -186,6 +187,7 @@ func initHeartBeatMessage() {
 		select {
 		case <-stopHeartBeat:
 			// Stop HeartBeat
+			break loop
 		// Send Command to peers
 		case commandRecv := <-entryQueue_chan:
 			fmt.Println("[->] Sending AppendEntriesWithData to peers..")
@@ -208,7 +210,7 @@ func initHeartBeatMessage() {
 		default:
 			fmt.Println("[->] Sending Heartbeat to peers..")
 			for _, peer := range peers {
-				go peer.sendMessage(Message{AppendEntry, Peer{port}})
+				go peer.sendMessage(Message{AppendEntry, Vote{port, term}})
 			}
 		}
 	}
@@ -242,6 +244,7 @@ func sendVote(vote Vote) bool {
 
 	// TODO contingency cases ??
 	fmt.Println("[2] Election Term: ", vote.Term)
+	sender := Peer{vote.Sender}
 	voteCasted := false
 	electionTerm := vote.Term
 	if term < electionTerm { // node hasn't voted for this term yet
@@ -249,11 +252,14 @@ func sendVote(vote Vote) bool {
 		fmt.Println("[->] Sending vote...")
 		// TODO peer object Find
 		//var conn net.Conn
-		sender := Peer{vote.Sender}
 		go sender.sendMessage(Message{GiveVote, vote})
 		voteCasted = true
 	} else {
 		fmt.Println("[2] Node already sent vote..")
+		// Leader already exists in network with higher term
+		if state == Leader {
+			go sender.sendMessage(Message{LeaderAppointed, port})
+		}
 	}
 	return voteCasted
 }
@@ -473,14 +479,33 @@ loop:
 			*/
 
 			//			}
-		// A Leader has sent append entries message .. Send Response
+		// A Leader has sent append entries message [Vote] .. Send Response
 		case leaderRecv := <-appendEntry_chan:
 			// TODO compare leaders ??
-			go leaderRecv.sendMessage(Message{AppendEntryResponse, Peer{port}})
+			// Append entry recv from new leader
+			if leaderRecv.Term > term {
 
-			// reset heartbeat timer ( may or maynot be drained )
-			fmt.Println("[4] Reseting Heartbeat Timer..")
-			resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+				term = leaderRecv.Term
+				// Step down if leader
+				if state == Leader {
+					state = Follower
+					stopHeartBeat <- true // Close initHeartbeatMessages
+				}
+				// Set new leader
+				go setLeader(leaderRecv.Sender)
+
+				// Request Updated Log
+				fmt.Println("[-] Requesting Updated Log..")
+
+				heartbeatTimer = time.NewTimer(time.Duration(rand.Intn(5)+6) * time.Second)
+
+			} else if leaderRecv.Term == term {
+				go leader.sendMessage(Message{AppendEntryResponse, Peer{port}})
+				// reset heartbeat timer ( may or maynot be drained )
+				fmt.Println("[4] Reseting Heartbeat Timer..")
+				resetTimer(heartbeatTimer, time.Duration(rand.Intn(5)+7)*time.Second)
+			}
+			// Less than can be a stray append entry -- Ignore
 
 		// A Follower received AppendEntrywithData
 		case changeLogRecv := <-appendEntryData_chan:
@@ -524,7 +549,7 @@ loop:
 		// Leader Has Opted To Black Out with a Peer
 		case peerToRemove := <-goDark_chan:
 			for _, peer := range peers {
-				if peer.Port != peerToRemove.Port || peer.Port != leader.Port {
+				if peer.Port != peerToRemove.Port && peer.Port != leader.Port {
 					blackoutPeers = append(blackoutPeers, peer)
 				}
 			}
@@ -572,7 +597,7 @@ func handleConnectionRequest(conn net.Conn) {
 	// Message Data : Peer{} [Leader]
 	case AppendEntry:
 		//fmt.Println("Sending IN CHANNEL")
-		appendEntry_chan <- msg.Data.(Peer)
+		appendEntry_chan <- msg.Data.(Vote)
 
 	// A Leader has recieved Append Entry Response from Follower
 	// Message Data : Peer{} [Follower]
@@ -606,6 +631,14 @@ func handleConnectionRequest(conn net.Conn) {
 		} else {
 			// Remove leader from array of peers
 			goDark_chan <- msg.Data.(Peer)
+		}
+	// Heal Network Partition
+	case LightsOn:
+		peers = originalPeers
+		if state == Leader {
+			for _, peer := range peers {
+				go peer.sendMessage(Message{LightsOn, Peer{port}})
+			}
 		}
 	}
 
@@ -660,13 +693,14 @@ func main() {
 	addVote = make(chan Vote)
 	appointLeader = make(chan string)
 	stopHeartBeat = make(chan bool)
-	appendEntry_chan = make(chan Peer)
+	appendEntry_chan = make(chan Vote)
 	appendEntryData_chan = make(chan ChangeLog)
 	appendEntryResponseData_chan = make(chan ChangeLog, 10)
 	entryQueue_chan = make(chan ChangeLog, 5)
 
 	blackout_chan = make(chan Peer)
 	goDark_chan = make(chan Peer)
+	letThereBeLight_chan = make(chan bool)
 
 	entryLog = make(map[int]ChangeLog)
 
